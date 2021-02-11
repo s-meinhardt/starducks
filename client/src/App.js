@@ -1,130 +1,164 @@
-import React, { Component } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import MyToken from './contracts/MyToken.json'
 import MyTokenSale from './contracts/MyTokenSale.json'
 import KycContract from './contracts/KycContract.json'
-import getWeb3 from './getWeb3'
+import Web3 from 'web3'
+import detectEthereumProvider from '@metamask/detect-provider'
 
 import './App.css'
 
-class App extends Component {
-  state = { loaded: false, tokenSaleAddress: null, userTokens: 0 }
+const App = () => {
+  const [loaded, setLoaded] = useState(false)
+  const [userTokens, setUserTokens] = useState(0)
+  const [account, setAccount] = useState()
+  const [token, setToken] = useState()
+  const [tokenSale, setTokenSale] = useState()
+  const [kycContract, setKycContract] = useState()
+  const [kycCompleted, setKycCompleted] = useState(false)
+  const [numberOfTokens, setNumberOfTokens] = useState('')
+  const [kycAdd, setKycAdd] = useState('')
+  const [kycRemove, setKycRemove] = useState('')
 
-  componentDidMount = async () => {
+  const getContracts = async () => {
     try {
-      // Get network provider and web3 instance.
-      this.web3 = await getWeb3()
-
-      // Use web3 to get the user's accounts.
-      this.accounts = await this.web3.eth.getAccounts()
-
-      // Get the network ID.
-      this.networkId = await this.web3.eth.net.getId()
-
-      // Get the token instance.
-      this.token = new this.web3.eth.Contract(
-        MyToken.abi,
-        MyToken.networks[this.networkId] &&
-          MyToken.networks[this.networkId].address
-      )
-
-      // Get the token sale instance.
-      this.tokenSale = new this.web3.eth.Contract(
-        MyTokenSale.abi,
-        MyTokenSale.networks[this.networkId] &&
-          MyTokenSale.networks[this.networkId].address
-      )
-
-      // Get the KYC contract instance.
-      this.kycContract = new this.web3.eth.Contract(
-        KycContract.abi,
-        KycContract.networks[this.networkId] &&
-          KycContract.networks[this.networkId].address
-      )
-
-      this.listenToTokenTransfer()
-      // Set web3, accounts, and contract to the state, and then proceed with an
-      // example of interacting with the contract's methods.
-      this.setState(
-        {
-          loaded: true,
-          tokenSaleAddress: MyTokenSale.networks[this.networkId].address,
-        },
-        this.updateUserTokens
-      )
+      const web3 = new Web3(await detectEthereumProvider())
+      handleAccountsChanged(await window.ethereum.request({ method: 'eth_accounts' }))
+      const networkId = await web3.eth.net.getId()
+      setToken(new web3.eth.Contract(MyToken.abi, MyToken.networks[networkId] && MyToken.networks[networkId].address))
+      setTokenSale(new web3.eth.Contract(MyTokenSale.abi, MyTokenSale.networks[networkId] && MyTokenSale.networks[networkId].address))
+      setKycContract(new web3.eth.Contract(KycContract.abi, KycContract.networks[networkId] && KycContract.networks[networkId].address))
     } catch (error) {
-      // Catch any errors for any of the above operations.
-      alert(
-        `Failed to load web3, accounts, or contract. Check console for details.`
-      )
+      alert(`Failed to load web3, accounts, or contract. Check console for details.`)
       console.error(error)
     }
   }
 
-  updateUserTokens = async () => {
-    let userTokens = await this.token.methods.balanceOf(this.accounts[0]).call()
-    this.setState({ userTokens: userTokens })
-  }
-
-  listenToTokenTransfer = () => {
-    this.token.events
-      .Transfer({ to: this.accounts[0] })
-      .on('data', this.updateUserTokens)
-  }
-
-  handleInputChange = (event) => {
-    const target = event.target
-    const value = target.type === 'checkbox' ? target.checked : target.value
-    const name = target.name
-    this.setState({
-      [name]: value,
-    })
-  }
-
-  handleKycWhitelisting = async (event) => {
-    await this.kycContract.methods
-      .setKycCompleted(this.state.kycAddress)
-      .send({ from: this.accounts[0] })
-    alert('KYC for ' + this.state.kycAddress + ' is completed.')
-  }
-
-  handleBuyTokens = async (event) => {
-    await this.tokenSale.methods
-      .buyTokens(this.accounts[0])
-      .send({ from: this.accounts[0], value: 1 })
-  }
-
-  render() {
-    if (!this.state.loaded) {
-      return <div>Loading Web3, accounts, and contract...</div>
+  const handleAccountsChanged = accounts => {
+    if (accounts.length === 0) {
+      console.log('Please connect to MetaMask.')
+    } else {
+      setAccount(accounts[0])
     }
-    return (
-      <div className='App'>
-        <h1>StarDucks Cappucino Token Sale</h1>
-        <p>Get your Tokens today!</p>
-        <h2>Kyc Whitelisting</h2>
-        Address to allow:{' '}
-        <input
-          type='text'
-          name='kycAddress'
-          value={this.state.kycAddress}
-          placeholder='0x123...'
-          onChange={this.handleInputChange}
-        />
-        <button type='button' onClick={this.handleKycWhitelisting}>
-          Add to Whitelist
-        </button>
-        <h2>Buy Tokens</h2>
-        <p>
-          If you want to buy tokens, send Wei to this address:{' '}
-          {this.state.tokenSaleAddress}
-        </p>
-        <p>You currently have: {this.state.userTokens} CAPPU Tokens</p>
-        <button type='button' onClick={this.handleBuyTokens}>
-          Buy more tokens
-        </button>
-      </div>
-    )
   }
+
+  const updateUserTokens = useCallback(() => {
+    // As 'token' is initiated as 'undefined' we need a conditional to prevent errors
+    if (token) {
+      token.methods
+        .balanceOf(account)
+        .call()
+        .then(tokens => setUserTokens(tokens))
+    }
+  }, [account, token])
+
+  const addKycWhitelisting = async event => {
+    event.preventDefault()
+    const address = kycAdd
+    setKycAdd('Please wait...')
+    try {
+      await kycContract.methods.setKycCompleted(address).send({ from: account })
+      alert(address + ' was added to the whitelist.')
+    } catch (error) {
+      alert('Transaction failed: Are you the contract owner?')
+      console.log(error)
+    }
+    setKycAdd('')
+  }
+
+  const removeKycWhitelisting = async event => {
+    event.preventDefault()
+    const address = kycRemove
+    setKycRemove('Please wait...')
+    try {
+      await kycContract.methods.setKycRevoked(address).send({ from: account })
+      alert(address + ' was removed from the whitelist.')
+    } catch (error) {
+      alert('Transaction failed: Are you the contract owner?')
+      console.log(error)
+    }
+    setKycRemove('')
+  }
+
+  const handleBuyTokens = async event => {
+    event.preventDefault()
+    const value = Math.max(parseInt(numberOfTokens), 0)
+    setNumberOfTokens('Please wait...')
+    if (isNaN(value)) {
+      alert('Please enter a natural number like 4 or 12!')
+    } else {
+      try {
+        await tokenSale.methods.buyTokens(account).send({ from: account, value: value })
+      } catch (error) {
+        alert('Transaction failed: Please ask the contract owner to whitelist your account!')
+        console.log(error)
+      }
+    }
+    setNumberOfTokens('')
+  }
+
+  useEffect(() => {
+    getContracts()
+    window.ethereum.on('accountsChanged', handleAccountsChanged)
+    setLoaded(true)
+  }, [])
+
+  useEffect(() => {
+    let subscription = null
+    // As 'kycContract', 'token' and 'account' are initiated as 'undefined' we need a conditional to prevent errors
+    if (kycContract && token && account) {
+      kycContract.methods
+        .kycCompleted(account)
+        .call()
+        .then(status => setKycCompleted(status))
+      updateUserTokens()
+      subscription = token.events.Transfer({ to: account }).on('data', () => updateUserTokens())
+    }
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe((error, success) => {
+          if (error) console.log(error)
+        })
+      }
+    }
+  }, [kycContract, token, account])
+
+  if (!loaded) {
+    return <div>Loading Web3, accounts, and contract...</div>
+  }
+  return (
+    <div className='App'>
+      <h1>StarDucks Cappucino Token Sale</h1>
+      <p>Get your Tokens today!</p>
+      <p>
+        <span>Note:</span> You need to be connected to the Ropsten test network.
+      </p>
+      <h2>Buy Tokens</h2>
+      <p>
+        Your account is {kycCompleted ? '' : 'not'} whitelisted. {kycCompleted ? 'You can buy tokens.' : 'Please contact the contract owner!'}
+      </p>
+      <p>You currently have: {userTokens} CAPPU Tokens</p>
+      <form className='form-control' onSubmit={handleBuyTokens}>
+        <label htmlFor='buyTokens'>How many tokens would you like to buy? One token costs one Wei.</label>
+        <br></br>
+        <input type='text' id='buyTokens' value={numberOfTokens} placeholder='0' onChange={e => setNumberOfTokens(e.target.value)} />
+        <button type='submit'>Buy Tokens</button>
+      </form>
+      <h2>Kyc Whitelisting</h2>
+      <p>
+        <span>Note:</span> This can only be done by the contract owner!
+      </p>
+      <form className='form-control' onSubmit={addKycWhitelisting}>
+        <label htmlFor='kycAddress'>Address to allow:</label>
+        <input type='text' id='kycAddress' value={kycAdd} placeholder='0x123...' onChange={e => setKycAdd(e.target.value)} />
+        <button type='submit'>Add to Whitelist</button>
+      </form>
+      <form className='form-control' onSubmit={removeKycWhitelisting}>
+        <label htmlFor='kycAddress'>Address to disallow:</label>
+        <input type='text' id='kycAddress' value={kycRemove} placeholder='0x123...' onChange={e => setKycRemove(e.target.value)} />
+        <button type='submit'>Remove from Whitelist</button>
+      </form>
+    </div>
+  )
 }
 
 export default App
